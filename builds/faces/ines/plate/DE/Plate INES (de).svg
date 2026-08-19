@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="600px" height="600px" viewBox="0 0 600 600" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Plate INES (de)</title>
+    <g id="Plate" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Plate-INES-(de)" fill-rule="nonzero">
+            <g id="Background" fill="#000000">
+                <rect id="Rectangle" x="0" y="0" width="600" height="600"></rect>
+            </g>
+            <g id="Words" transform="translate(88.225098, 110.000000)" fill="#FFFFFF" font-family="ArialMT, Arial" font-size="26" font-weight="normal">
+                <g id="Hours" transform="translate(0.000000, 230.000000)">
+                    <g id="Group" transform="translate(25.360352, 120.000000)">
+                        <text id="ZWÖLF">
+                            <tspan x="283" y="24">ZWÖLF</tspan>
+                        </text>
+                        <text id="ELF">
+                            <tspan x="205" y="24">ELF</tspan>
+                        </text>
+                        <text id="ZEHN">
+                            <tspan x="104" y="24">ZEHN</tspan>
+                        </text>
+                        <text id="NEUN">
+                            <tspan x="0" y="24">NEUN</tspan>
+                        </text>
+                    </g>
+                    <g id="Group" transform="translate(0.000000, 60.000000)">
+                        <text id="FÜNF">
+                            <tspan x="354" y="24">FÜNF</tspan>
+                        </text>
+                        <text id="SECHS">
+                            <tspan x="234" y="24">SECHS</tspan>
+                        </text>
+                        <text id="SIEBEN">
+                            <tspan x="101" y="24">SIEBEN</tspan>
+                        </text>
+                        <text id="ACHT">
+                            <tspan x="0" y="24">ACHT</tspan>
+                        </text>
+                    </g>
+                    <g id="Group" transform="translate(42.479492, 0.000000)">
+                        <text id="VIER">
+                            <tspan x="279" y="24">VIER</tspan>
+                        </text>
+                        <text id="DREI">
+                            <tspan x="186" y="24">DREI</tspan>
+                        </text>
+                        <text id="ZWEI">
+                            <tspan x="91" y="24">ZWEI</tspan>
+                        </text>
+                        <text id="EINS">
+                            <tspan x="0" y="24">EINS</tspan>
+                        </text>
+                    </g>
+                </g>
+                <g id="Minutes" transform="translate(7.774902, 0.000000)">
+                    <g id="Group" transform="translate(0.000000, 120.000000)">
+                        <text id="HALB">
+                            <tspan x="340" y="24">HALB</tspan>
+                        </text>
+                        <text id="VOR">
+                            <tspan x="253" y="24">VOR</tspan>
+                        </text>
+                        <text id="NACH">
+                            <tspan x="149" y="24">NACH</tspan>
+                        </text>
+                        <text id="ZWANZIG">
+                            <tspan x="0" y="24">ZWANZIG</tspan>
+                        </text>
+                    </g>
+                    <g id="Group" transform="translate(59.475586, 60.000000)">
+                        <text id="VIERTEL">
+                            <tspan x="181" y="24">VIERTEL</tspan>
+                        </text>
+                        <text id="ZEHN">
+                            <tspan x="90" y="24">ZEHN</tspan>
+                        </text>
+                        <text id="FÜNF">
+                            <tspan x="0" y="24">FÜNF</tspan>
+                        </text>
+                    </g>
+                    <g id="Group" transform="translate(111.598145, 0.000000)">
+                        <text id="DREI-">
+                            <tspan x="113" y="24">DREI-</tspan>
+                        </text>
+                        <text id="GENAU">
+                            <tspan x="0" y="24">GENAU</tspan>
+                        </text>
+                    </g>
+                </g>
+            </g>
+            <g id="Dashes" stroke-linecap="square" transform="translate(200.701612, 299.149852)" fill="#000000" stroke="#FFFFFF" stroke-width="3">
+                <line x1="0.00566984623" y1="0.499870604" x2="40.1404012" y2="1.20042475" id="Line" transform="translate(20.073036, 0.850148) rotate(-1.000000) translate(-20.073036, -0.850148) "></line>
+                <line x1="52.8225712" y1="0.499870596" x2="92.9573027" y2="1.20042475" id="Line" transform="translate(72.889937, 0.850148) rotate(-1.000000) translate(-72.889937, -0.850148) "></line>
+                <line x1="105.639473" y1="0.499870609" x2="145.774204" y2="1.20042476" id="Line" transform="translate(125.706838, 0.850148) rotate(-1.000000) translate(-125.706838, -0.850148) "></line>
+                <line x1="158.456374" y1="0.4998706" x2="198.591106" y2="1.20042475" id="Line" transform="translate(178.523740, 0.850148) rotate(-1.000000) translate(-178.523740, -0.850148) "></line>
+            </g>
+        </g>
+    </g>
+</svg>

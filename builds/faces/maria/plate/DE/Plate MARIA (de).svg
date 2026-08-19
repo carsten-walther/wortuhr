@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="600px" height="600px" viewBox="0 0 600 600" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Plate MARIA (de)</title>
+    <g id="Plate" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Plate-MARIA-(de)" fill-rule="nonzero">
+            <g id="Background" fill="#000000">
+                <rect id="Rectangle" x="0" y="0" width="600" height="600"></rect>
+            </g>
+            <g id="Words" transform="translate(141.000000, 60.000000)" fill="#FFFFFF" font-family="ArialMT, Arial" font-size="26" font-weight="normal">
+                <g id="Right" transform="translate(205.475586, 0.000000)">
+                    <text id="ZWÖLF">
+                        <tspan x="8.1098628" y="474">ZWÖLF</tspan>
+                    </text>
+                    <text id="ZEHN">
+                        <tspan x="19.1098628" y="424">ZEHN</tspan>
+                    </text>
+                    <text id="ACHT">
+                        <tspan x="18.7495112" y="374">ACHT</tspan>
+                    </text>
+                    <text id="SECHS">
+                        <tspan x="8.74951125" y="324">SECHS</tspan>
+                    </text>
+                    <text id="VIER">
+                        <tspan x="23.2290034" y="274">VIER</tspan>
+                    </text>
+                    <text id="ZWEI">
+                        <tspan x="21.2290034" y="224">ZWEI</tspan>
+                    </text>
+                    <text id="HALB">
+                        <tspan x="19.5244136" y="174">HALB</tspan>
+                    </text>
+                    <text id="NACH">
+                        <tspan x="16.5244136" y="124">NACH</tspan>
+                    </text>
+                    <text id="VIERTEL">
+                        <tspan x="0" y="74">VIERTEL</tspan>
+                    </text>
+                    <text id="DREI">
+                        <tspan x="22.1225586" y="24">DREI</tspan>
+                    </text>
+                </g>
+                <g id="Left">
+                    <text id="ELF">
+                        <tspan x="34.5854492" y="474">ELF</tspan>
+                    </text>
+                    <text id="NEUN">
+                        <tspan x="21.5854492" y="424">NEUN</tspan>
+                    </text>
+                    <text id="SIEBEN">
+                        <tspan x="7.22509765" y="374">SIEBEN</tspan>
+                    </text>
+                    <text id="FÜNF">
+                        <tspan x="24.2250976" y="324">FÜNF</tspan>
+                    </text>
+                    <text id="DREI">
+                        <tspan x="27.7045898" y="274">DREI</tspan>
+                    </text>
+                    <text id="EINS">
+                        <tspan x="28.7045898" y="224">EINS</tspan>
+                    </text>
+                    <text id="VOR">
+                        <tspan x="31" y="174">VOR</tspan>
+                    </text>
+                    <text id="ZEHN">
+                        <tspan x="23.4755864" y="124">ZEHN</tspan>
+                    </text>
+                    <text id="ZWANZIG">
+                        <tspan x="0" y="73.9999998">ZWANZIG</tspan>
+                    </text>
+                    <text id="FÜNF">
+                        <tspan x="24.4755864" y="24">FÜNF</tspan>
+                    </text>
+                </g>
+            </g>
+            <g id="Dashes" stroke-linecap="square" transform="translate(300.000000, 300.000000) rotate(-90.000000) translate(-300.000000, -300.000000) translate(170.701612, 299.149852)" fill="#000000" stroke="#FFFFFF" stroke-width="3">
+                <line x1="0.00566984623" y1="0.499870604" x2="40.1404012" y2="1.20042475" id="Line" transform="translate(20.073036, 0.850148) rotate(-1.000000) translate(-20.073036, -0.850148) "></line>
+                <line x1="72.8225712" y1="0.499870596" x2="112.957303" y2="1.20042475" id="Line" transform="translate(92.889937, 0.850148) rotate(-1.000000) translate(-92.889937, -0.850148) "></line>
+                <line x1="145.639473" y1="0.499870609" x2="185.774204" y2="1.20042476" id="Line" transform="translate(165.706838, 0.850148) rotate(-1.000000) translate(-165.706838, -0.850148) "></line>
+                <line x1="218.456374" y1="0.4998706" x2="258.591106" y2="1.20042475" id="Line" transform="translate(238.523740, 0.850148) rotate(-1.000000) translate(-238.523740, -0.850148) "></line>
+            </g>
+        </g>
+    </g>
+</svg>

@@ -1,0 +1,1092 @@
+# ═══════════════════════════════════════════════════════════
+#  Wortuhr
+#  ESP32-C3 + WS2811 word matrix (25 LEDs) + DS1307 RTC
+#  German word clock, four dialects | Home Assistant + MQTT
+# ═══════════════════════════════════════════════════════════
+
+#
+# Pinout of the controller board this is built around:
+# https://ae01.alicdn.com/kf/S599e56d749264509953082dbdb578a9e6.jpg
+#
+
+substitutions:
+  project_name: wortuhr
+  author_name: carsten-walther
+  friendly_name: Wortuhr
+  comment: Just another wordclock
+  version: 2026.8.19
+  area: Miscellaneous
+
+  #
+  # GPIOs
+  #
+  # GPIO8 and GPIO9 are strapping pins on the ESP32-C3: GPIO9 selects the
+  # download mode and GPIO8 has to be high or floating while the chip comes
+  # out of reset. Both are held up by the pull-up resistors the DS1307
+  # breakout already carries, which is the only reason this pair is usable
+  # for i2c at all - a pull-down on either one boots into the ROM
+  # bootloader instead of into the firmware.
+  #
+  PIN_I2C_SDA: GPIO08
+  PIN_I2C_SCL: GPIO09
+
+  #
+  # WS2811 data line. Clear of the strapping pins above and of GPIO18/19,
+  # which carry the USB serial console.
+  #
+  PIN_NEOPIXEL_DATA: GPIO10
+
+  #
+  # Nine minute words, four minute dots and twelve hour words. The index of
+  # each one is fixed by the constants at the top of the "Time" effect
+  # below, so changing this count means changing that map with it.
+  #
+  NUMBER_OF_LEDS: '25'
+
+  #
+  # What every boot puts on the panel, see the on_boot stage at priority
+  # -100. Switching the light off and on again keeps whatever Home
+  # Assistant last set, but a reboot does not: the boot stage sets white at
+  # this brightness unconditionally.
+  #
+  # Drop brightness and the three colour channels from that stage to make
+  # the setting survive a reboot as well - the light restores its own
+  # values, and the stage only has to turn it on and pick the effect. What
+  # that costs is a device with nothing stored yet coming up at full
+  # brightness instead of at this figure.
+  #
+  LIGHT_BRIGHTNESS_DEFAULT: "70%"
+
+  #
+  # How often the "Time" effect repaints. The panel's content changes once
+  # a minute, so this is not about the clock - it is the resolution of the
+  # 1s fade on switch-on, which is the only thing here that moves. At 100ms
+  # that fade is ten steps, which reads as a fade; the component default of
+  # 16ms is sixty repaints a second for the other 59.99 seconds of every
+  # minute, all of them identical.
+  #
+  CLOCK_REFRESH_INTERVAL: 100ms
+
+#
+# https://esphome.io/components/esphome
+#
+esphome:
+  name: "${project_name}"
+  friendly_name: "${friendly_name}"
+  comment: "${comment}"
+  area: "${area}"
+
+  project:
+    name: "${author_name}.${project_name}"
+    version: "${version}"
+
+  #
+  # The panel is the only output this device has, so it doubles as the boot
+  # indicator. Four stages, in the order they run:
+  #
+  #   800   read the RTC, before anything asks what time it is. i2c is up
+  #         at priority 1000, so the bus is ready by the time this fires.
+  #   600   rainbow: the panel is alive and the firmware is running
+  #   200   rainbow off again if WiFi came up in time
+  #  -100   the clock itself
+  #
+  # The priority 200 stage is a nicety rather than a requirement - stage
+  # -100 replaces the rainbow with the clock either way. What it buys is a
+  # dark panel for the last stretch of the boot when the network was there,
+  # which is the difference between "still starting" and "no WiFi".
+  #
+  on_boot:
+    - priority: 800
+      then:
+        - ds1307.read_time:
+
+    - priority: 600
+      then:
+        - light.turn_on:
+            id: led_strip_id
+            effect: Rainbow
+
+    - priority: 200
+      then:
+        if:
+          condition:
+            wifi.connected:
+          then:
+            - light.turn_off:
+                id: led_strip_id
+
+    - priority: -100
+      then:
+        - light.turn_on:
+            id: led_strip_id
+            brightness: ${LIGHT_BRIGHTNESS_DEFAULT}
+            red: 100%
+            green: 100%
+            blue: 100%
+            effect: Time
+
+  #
+  # Blank the panel on a clean shutdown, so an OTA or a commanded restart
+  # does not leave the last frame frozen on the wall for the duration of
+  # the reboot. Priority 700 is early enough to still have the light
+  # component around to talk to.
+  #
+  on_shutdown:
+    priority: 700
+    then:
+      - light.turn_off:
+          id: led_strip_id
+
+#
+# https://esphome.io/components/esp32
+#
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: ESP32C3
+  framework:
+    #
+    # esp-idf. This ran on arduino for a long time, which on recent ESPHome
+    # meant arduino-esp32 built as a component inside ESP-IDF anyway - the
+    # Arduino layer was a wrapper on top of the same toolchain rather than
+    # a second one. Dropping it took about 43kB of flash off the image and
+    # removed a translation layer from between this config and the chip.
+    #
+    # The one thing it cost is the LED platform. light/neopixelbus is
+    # arduino-only; under esp-idf ESPHome refuses it outright with
+    #
+    #   light.neopixelbus: This feature is only available with
+    #   framework(s) arduino
+    #
+    # so the strip is driven by esp32_rmt_led_strip below instead. Both are
+    # AddressableLight, so that swap was the platform block and nothing
+    # else - the effects list and the whole "Time" lambda came across
+    # verbatim.
+    #
+    # Going back means reversing exactly those two things together. An even
+    # older revision of this file claimed the opposite direction was
+    # required - esp-idf, because arduino-esp32 pulls a libsodium stub that
+    # shadows esphome/libsodium and breaks the noise-c build behind "api:
+    # encryption". That never held: the encrypted API compiled and linked
+    # fine on arduino here, right up to this change.
+    #
+    type: esp-idf
+
+#
+# https://esphome.io/components/esphome/#preferences
+#
+# The selected dialect is the only value that survives a reboot (see the
+# Mode select below) and it changes about never. The default 60s flush
+# interval would still walk the flash on every write for no benefit.
+#
+preferences:
+  flash_write_interval: 5min
+
+#
+# https://esphome.io/components/logger
+#
+# INFO is the operating level. Nothing in the hot path logs at it - the
+# "Time" effect writes 25 pixels and says nothing - so the cost is a handful
+# of lines at startup and on state changes, against a device that otherwise
+# tells you nothing at all about why it is behaving oddly.
+#
+# ERROR was the level here for a long time. It hides the WiFi and MQTT
+# connect/disconnect lines, which are exactly the ones worth having on a
+# node that talks to two brokers of a sort.
+#
+# DEBUG is the lowest level that includes dump_config(), which is where the
+# i2c bus scan would appear - though scan is off below, so turn that on at
+# the same time if the question is whether the DS1307 answers. Attach the
+# log client before rebooting; the startup output is not replayed.
+#
+# hardware_uart matters on this board: the default UART0 goes to GPIO20/21,
+# which are not connected to anything on a DevKitM-1. The USB socket is a
+# USB-Serial-JTAG peripheral, so without this line an INFO level would be
+# logging into a void.
+#
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+#
+# https://esphome.io/components/wifi
+#
+# power_save_mode NONE. Under LIGHT the radio sleeps between DTIM beacons,
+# which adds 100-300ms to inbound packets - noticeable on the web server
+# and on API state changes. This device hangs on mains power, so the ~40mA
+# it costs buys nothing back.
+#
+# fast_connect True skips the scan and goes straight for the stored
+# network. Worth having on a device that sits in one room within range of
+# one access point; it is deliberately off on the mobile sibling config,
+# where a network that is never in range turns it into a retry loop.
+#
+wifi:
+  id: wifi_id
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: .local
+  fast_connect: False
+  power_save_mode: NONE
+
+  #
+  # 0s disables the reboot-when-no-network watchdog. The default 15min
+  # restarts the device for as long as the router is down, and here a
+  # restart is something you can see across the room: the panel goes dark,
+  # runs the boot rainbow and comes back. The DS1307 carries the time
+  # through an outage on its own, so there is nothing a reboot fixes that
+  # simply waiting does not.
+  #
+  reboot_timeout: 0s
+  enable_on_boot: True
+
+  #
+  # Fallback access point, so the device stays configurable when the home
+  # network is gone. SSID "${project_name}", password from secrets.
+  #
+  ap:
+    ssid: "${project_name}"
+    password: !secret wifi_ap_password
+
+#
+# https://esphome.io/components/captive_portal
+#
+# Makes a phone open the setup page by itself once it joins the fallback
+# AP, which beats typing an address at somebody else's house.
+#
+captive_portal:
+
+#
+# https://esphome.io/components/api
+#
+api:
+  # Transport encryption for the API layer; the pre-shared key lives in
+  # secrets.yaml.
+  encryption:
+    key: !secret api_encryption_key
+
+  #
+  # 0s disables the reboot-when-no-client watchdog, same reasoning as the
+  # wifi one above. This node also publishes over MQTT, so losing the Home
+  # Assistant connection is not the same as losing the device.
+  #
+  reboot_timeout: 0s
+
+#
+# https://esphome.io/components/mqtt
+#
+# The second, independent path to the outside. discovery is off because
+# every entity here is already adopted through the API - leaving it on
+# would create a duplicate set of entities in Home Assistant.
+#
+# reboot_timeout 0s for the third time: a broker that is unreachable is not
+# a reason to interrupt a clock.
+#
+mqtt:
+  id: mqtt_client_id
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  reboot_timeout: 0s
+  enable_on_boot: True
+  discovery: False
+  keepalive: 60s
+
+#
+# https://esphome.io/components/web_server
+#
+# Reachable at http://${project_name}.local on the home network, or at
+# 192.168.4.1 over the fallback AP.
+#
+# local: true is not cosmetic. By default version 3 pulls its JavaScript
+# from https://oi.esphome.io when the page loads, which leaves a blank page
+# on any network without internet access. This embeds the assets in the
+# firmware instead, at the cost of roughly 210kB of flash.
+#
+web_server:
+  port: 80
+  version: 3
+  local: True
+
+#
+# https://esphome.io/components/ota
+#
+# Only the classic push OTA from the dashboard. The http_request pull
+# platform is not worth the flash here: there is no scenario in which this
+# device has to update itself unattended.
+#
+# There is no progress indicator either. The panel could show one - 25 LEDs
+# are enough for a coarse bar - but during an update the main loop sits in
+# the OTA receive path, so every frame would have to be pushed from the OTA
+# callbacks themselves. Not worth it on a device hanging on the wall in
+# plain sight, where the boot rainbow already says the new build came up.
+#
+ota:
+  #
+  # https://esphome.io/components/ota/esphome
+  #
+  - platform: esphome
+    password: !secret ota_password
+
+#
+# https://esphome.io/components/i2c
+#
+# The DS1307 is the only device on this bus and it is a 100kHz part - it
+# does not do fast mode, so there is nothing to gain by raising this.
+#
+# scan is off because there is nothing to discover on a one-device bus and
+# the scan costs a moment on every boot. Turn it on together with logger
+# level DEBUG when the question is whether the RTC answers at all: the
+# address list is the fastest way to tell a dead module from a wiring
+# fault.
+#
+i2c:
+  id: i2c_id
+  sda: ${PIN_I2C_SDA}
+  scl: ${PIN_I2C_SCL}
+  frequency: 100kHz
+  scan: False
+
+#
+# https://esphome.io/components/time
+#
+# Two sources, one clock. The DS1307 is the one that survives a power cut
+# and a router outage; SNTP is the one that is actually accurate. They are
+# wired so that the network corrects the RTC and the RTC covers the gaps.
+#
+# Both platforms set the same system clock, which is why the display lambda
+# further down can read either id and get the same answer.
+#
+time:
+
+  #
+  # https://esphome.io/components/time/ds1307
+  #
+  # Read once at boot (see on_boot priority 800) and never polled again.
+  # Repeated re-reads would only pull the accurate SNTP time back towards
+  # the drift of a DS1307, which is the wrong direction.
+  #
+  - platform: ds1307
+    id: ds1307_time
+    address: 0x68
+    update_interval: never
+
+  #
+  # https://esphome.io/components/time/sntp
+  #
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+
+    #
+    # Every successful network sync is written back to the RTC, so the
+    # battery-backed time is never more than one sync interval stale. This
+    # is what makes the clock come up right after a power cut without a
+    # network.
+    #
+    on_time_sync:
+      then:
+        ds1307.write_time:
+          id: ds1307_time
+
+#
+# https://esphome.io/components/select/template
+#
+# Which way the clock says the time. The four options are not translations
+# of each other - they disagree about specific quarters, and only about
+# those, which is what the branches in the effect lambda below are for:
+#
+#   Hochdeutsch   viertel nach / zwanzig nach / zwanzig vor / viertel vor
+#   Bayrisch      as above, except "drei viertel" instead of "viertel vor"
+#   Sächsisch     "viertel" and "drei viertel" for the quarters, and
+#                 counts twenty past and twenty to around "halb"
+#   Schwäbisch    "viertel" and "drei viertel", twenty as in Hochdeutsch
+#
+# restore_value keeps the choice across a reboot; see preferences above for
+# why that costs nothing.
+#
+select:
+  - platform: template
+    name: "Mode"
+    id: wortuhr_mode
+    options:
+      - "Hochdeutsch"
+      - "Bayrisch"
+      - "Sächsisch"
+      - "Schwäbisch"
+    initial_option: "Hochdeutsch"
+    optimistic: True
+    restore_value: True
+    icon: mdi:translate
+
+#
+# https://esphome.io/components/light
+#
+# https://esphome.io/components/light/esp32_rmt_led_strip
+#
+#   ESP32-C3 DevKitM-1        WS2811 chain
+#   ──────────────────        ────────────
+#   GPIO10 ────────────────── DIN
+#   GND ───────────────────── GND
+#   5V ────────────────────── +5V
+#
+# The strip runs on 5V while the ESP drives the data line at 3.3V. A WS2811
+# reads a high above 0.7 x VDD, which is 3.5V - so 3.3V is marginally out
+# of spec and works on most batches and not on others. If the first LED
+# flickers or shows the wrong colour while the rest of the chain is fine,
+# that is this, and a level shifter fixes it.
+#
+# Driven from the RMT peripheral rather than from a bit-banging library,
+# which is what the move to esp-idf forced and what the strip has been
+# running on since. The timing is generated in hardware, so a busy main
+# loop no longer shows up as a wrong colour.
+#
+light:
+  - platform: esp32_rmt_led_strip
+    id: led_strip_id
+    name: "LED Color"
+    rgb_order: GRB
+    chipset: WS2811
+    pin: ${PIN_NEOPIXEL_DATA}
+    num_leds: ${NUMBER_OF_LEDS}
+    default_transition_length: 1s
+
+    effects:
+      #
+      # The three stock effects are boot and test indicators rather than
+      # anything you would leave running: Rainbow is what on_boot shows
+      # while the network comes up, the other two are there to walk the
+      # chain when a LED is suspected dead.
+      #
+      - addressable_rainbow:
+      - addressable_color_wipe:
+      - addressable_scan:
+
+      #
+      # ── The clock itself ─────────────────────────────────
+      #
+      # Repaints the whole panel from the current time on every tick. There
+      # is no incremental drawing and no dirty flag: 25 pixels are cheap
+      # enough that recomputing them is simpler than tracking what changed,
+      # and it means the panel is self-correcting - a frame lost to a WiFi
+      # burst is gone one tick later.
+      #
+      # See CLOCK_REFRESH_INTERVAL at the top for why that tick is not the
+      # component default.
+      #
+      - addressable_lambda:
+          name: "Time"
+          update_interval: ${CLOCK_REFRESH_INTERVAL}
+          lambda: |-
+            //
+            // ── LED map ──────────────────────────────────
+            //
+            // Physical index of every word on the panel. This is the
+            // wiring, not a preference: it follows the order the chain is
+            // soldered in, so it changes only when the panel does.
+            //
+            // Index 0 carries the word shown both on the exact hour and
+            // alongside "halb", which is why it appears in two cases below.
+            //
+
+            // minute words
+            constexpr uint8_t DE_GENAU   = 0;
+            constexpr uint8_t DE_DREI    = 1;
+            constexpr uint8_t DE_VIERTEL = 2;
+            constexpr uint8_t DE_ZEHN    = 3;
+            constexpr uint8_t DE_FUENF   = 4;
+            constexpr uint8_t DE_ZWANZIG = 5;
+            constexpr uint8_t DE_NACH    = 6;
+            constexpr uint8_t DE_VOR     = 7;
+            constexpr uint8_t DE_HALB    = 8;
+
+            // the four dots that count the minutes between two words
+            constexpr uint8_t DE_M_EINS = 12;
+            constexpr uint8_t DE_M_ZWEI = 11;
+            constexpr uint8_t DE_M_DREI = 10;
+            constexpr uint8_t DE_M_VIER = 9;
+
+            // hour words
+            constexpr uint8_t DE_H_EINS   = 13;
+            constexpr uint8_t DE_H_ZWEI   = 14;
+            constexpr uint8_t DE_H_DREI   = 15;
+            constexpr uint8_t DE_H_VIER   = 16;
+            constexpr uint8_t DE_H_FUENF  = 17;
+            constexpr uint8_t DE_H_SECHS  = 18;
+            constexpr uint8_t DE_H_SIEBEN = 19;
+            constexpr uint8_t DE_H_ACHT   = 20;
+            constexpr uint8_t DE_H_NEUN   = 21;
+            constexpr uint8_t DE_H_ZEHN   = 22;
+            constexpr uint8_t DE_H_ELF    = 23;
+            constexpr uint8_t DE_H_ZWOELF = 24;
+
+            //
+            // ── Dialects ─────────────────────────────────
+            //
+            // Index into the Mode select above, in the order its options
+            // are declared. The two have to stay in step.
+            //
+            constexpr size_t LANGUAGE_DE_DE = 0;   // Hochdeutsch
+            constexpr size_t LANGUAGE_DE_BA = 1;   // Bayrisch
+            constexpr size_t LANGUAGE_DE_SA = 2;   // Saechsisch
+            constexpr size_t LANGUAGE_DE_SW = 3;   // Schwaebisch
+
+            //
+            // Both time platforms feed the same system clock, so this reads
+            // the RTC value before the first network sync and the SNTP one
+            // afterwards.
+            //
+            auto time = id(sntp_time).now();
+            int hour = time.hour;
+            int minute = time.minute;
+
+            auto bgColor = Color::BLACK;
+            auto color = current_color;
+
+            //
+            // active_index() is empty only if the select has no option at
+            // all, which initial_option rules out - but falling back to
+            // Hochdeutsch is cheaper than the crash if it ever did.
+            //
+            auto mode_index = id(wortuhr_mode).active_index();
+            const size_t mode = mode_index.has_value() ? *mode_index : LANGUAGE_DE_DE;
+
+            //
+            // Nothing is drawn until the clock is actually set. Leaving the
+            // panel dark is the honest answer - a wrong time shown
+            // confidently is worse than no time at all.
+            //
+            if (time.is_valid() == true)
+            {
+
+              it.range(0, it.size()) = bgColor;
+
+              //
+              // Everything past half past names the *next* hour ("fünf vor
+              // halb zehn" is 21:25), so the minute branches below bump
+              // `hour` and these two keep it in range afterwards.
+              //
+              while (hour < 0)
+              {
+                hour += 12;
+              }
+
+              while (hour > 24)
+              {
+                hour -= 12;
+              }
+
+              //
+              // ── Minute words, in five minute steps ─────
+              //
+              // The dialects differ only where a case has a branch; every
+              // other five minute step is said the same way by all four.
+              //
+              switch (minute / 5)
+              {
+                case 0:
+                  // genau
+                  it[DE_GENAU] = color;
+                  break;
+
+                case 1:
+                  // 5 nach
+                  it[DE_FUENF] = color;
+                  it[DE_NACH] = color;
+                  break;
+
+                case 2:
+                  // 10 nach
+                  it[DE_ZEHN] = color;
+                  it[DE_NACH] = color;
+                  break;
+
+                case 3:
+                  if ((mode == LANGUAGE_DE_SW) || (mode == LANGUAGE_DE_SA))
+                  {
+                    // viertel
+                    it[DE_VIERTEL] = color;
+                    hour = hour + 1;
+                  }
+                  else
+                  {
+                    // viertel nach
+                    it[DE_VIERTEL] = color;
+                    it[DE_NACH] = color;
+                  }
+                  break;
+
+                case 4:
+                  if (mode == LANGUAGE_DE_SA)
+                  {
+                    // 10 vor halb
+                    it[DE_ZEHN] = color;
+                    it[DE_VOR] = color;
+                    it[DE_HALB] = color;
+                    hour = hour + 1;
+                  }
+                  else
+                  {
+                    // 20 nach
+                    it[DE_ZWANZIG] = color;
+                    it[DE_NACH] = color;
+                  }
+                  break;
+
+                case 5:
+                  // 5 vor halb
+                  it[DE_FUENF] = color;
+                  it[DE_VOR] = color;
+                  it[DE_HALB] = color;
+                  hour = hour + 1;
+                  break;
+
+                case 6:
+                  // halb
+                  it[DE_GENAU] = color;
+                  it[DE_HALB] = color;
+                  hour = hour + 1;
+                  break;
+
+                case 7:
+                  // 5 nach halb
+                  it[DE_FUENF] = color;
+                  it[DE_NACH] = color;
+                  it[DE_HALB] = color;
+                  hour = hour + 1;
+                  break;
+
+                case 8:
+                  if (mode == LANGUAGE_DE_SA)
+                  {
+                    // 10 nach halb
+                    it[DE_ZEHN] = color;
+                    it[DE_NACH] = color;
+                    it[DE_HALB] = color;
+                    hour = hour + 1;
+                  }
+                  else
+                  {
+                    // 20 vor
+                    it[DE_ZWANZIG] = color;
+                    it[DE_VOR] = color;
+                  }
+                  break;
+
+                case 9:
+                  if ((mode == LANGUAGE_DE_SW) || (mode == LANGUAGE_DE_BA) || (mode == LANGUAGE_DE_SA))
+                  {
+                    // drei viertel
+                    it[DE_DREI] = color;
+                    it[DE_VIERTEL] = color;
+                    hour = hour + 1;
+                  }
+                  else
+                  {
+                    // viertel vor
+                    it[DE_VIERTEL] = color;
+                    it[DE_VOR] = color;
+                    hour = hour + 1;
+                  }
+                  break;
+
+                case 10:
+                  // 10 vor
+                  it[DE_ZEHN] = color;
+                  it[DE_VOR] = color;
+                  hour = hour + 1;
+                  break;
+
+                case 11:
+                  // 5 vor
+                  it[DE_FUENF] = color;
+                  it[DE_VOR] = color;
+                  hour = hour + 1;
+                  break;
+              }
+
+              //
+              // ── Hour word ──────────────────────────────
+              //
+              // 24 is reachable: 23 plus the bump from the minute branches
+              // above. It means midnight, same as 0 and 12.
+              //
+              switch (hour)
+              {
+                case 0:
+                case 12:
+                case 24:
+                  it[DE_H_ZWOELF] = color;
+                  break;
+
+                case 1:
+                case 13:
+                  it[DE_H_EINS] = color;
+                  break;
+
+                case 2:
+                case 14:
+                  it[DE_H_ZWEI] = color;
+                  break;
+
+                case 3:
+                case 15:
+                  it[DE_H_DREI] = color;
+                  break;
+
+                case 4:
+                case 16:
+                  it[DE_H_VIER] = color;
+                  break;
+
+                case 5:
+                case 17:
+                  it[DE_H_FUENF] = color;
+                  break;
+
+                case 6:
+                case 18:
+                  it[DE_H_SECHS] = color;
+                  break;
+
+                case 7:
+                case 19:
+                  it[DE_H_SIEBEN] = color;
+                  break;
+
+                case 8:
+                case 20:
+                  it[DE_H_ACHT] = color;
+                  break;
+
+                case 9:
+                case 21:
+                  it[DE_H_NEUN] = color;
+                  break;
+
+                case 10:
+                case 22:
+                  it[DE_H_ZEHN] = color;
+                  break;
+
+                case 11:
+                case 23:
+                  it[DE_H_ELF] = color;
+                  break;
+              }
+
+              //
+              // ── Minute dots ────────────────────────────
+              //
+              // The words above only resolve to five minutes. These four
+              // count the remainder, so the panel is accurate to the
+              // minute for anyone who knows to look at them.
+              //
+              switch (minute % 5)
+              {
+                case 0:
+                    break;
+
+                case 1:
+                  it[DE_M_EINS] = color;
+                  break;
+
+                case 2:
+                  it[DE_M_EINS] = color;
+                  it[DE_M_ZWEI] = color;
+                  break;
+
+                case 3:
+                  it[DE_M_EINS] = color;
+                  it[DE_M_ZWEI] = color;
+                  it[DE_M_DREI] = color;
+                  break;
+
+                case 4:
+                  it[DE_M_EINS] = color;
+                  it[DE_M_ZWEI] = color;
+                  it[DE_M_DREI] = color;
+                  it[DE_M_VIER] = color;
+                  break;
+              }
+            }
+
+    #
+    # Switching the panel on puts the clock back on it and changes nothing
+    # else. Colour and brightness are whatever they were, restored by the
+    # light component on its own.
+    #
+    # This block used to force white at ${LIGHT_BRIGHTNESS_DEFAULT} as well,
+    # which meant every adjustment made from Home Assistant was thrown away
+    # the next time the light was cycled. The effect is still forced,
+    # because that is the failure actually worth preventing: a light coming
+    # back with effect "None" is 25 LEDs of flat colour, which is not a
+    # clock. The white and the 70% now live only in on_boot above, as what
+    # a device with nothing stored yet starts from.
+    #
+    # Re-entry is not a concern: the trigger fires on the off-to-on edge,
+    # and by the time this call runs the light is already on.
+    #
+    on_turn_on:
+      - light.turn_on:
+          id: led_strip_id
+          effect: Time
+
+#
+# https://esphome.io/components/text_sensor
+#
+text_sensor:
+  #
+  # https://esphome.io/components/text_sensor/version
+  #
+  # Which ESPHome built the running firmware, as opposed to which one is
+  # installed on the machine in front of you.
+  #
+  - platform: version
+    name: "ESPHome Version"
+    icon: mdi:new-box
+
+  #
+  # https://esphome.io/components/text_sensor/template
+  #
+  # The `version` substitution at the top of this file, published as an
+  # entity. This is what says whether an OTA actually took - which is why
+  # it is worth bumping on every change.
+  #
+  - platform: template
+    name: "Firmware Version"
+    icon: mdi:new-box
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      return {"$version"};
+
+  #
+  # https://esphome.io/components/text_sensor/wifi_info
+  #
+  - platform: wifi_info
+    ssid:
+      name: "SSID"
+      icon: mdi:wifi-star
+    ip_address:
+      name: "IP Address"
+      icon: mdi:ip-network-outline
+    dns_address:
+      name: "DNS Address"
+      icon: mdi:dns-outline
+
+  #
+  # Uptime as something readable, formatted from the internal seconds
+  # counter below rather than measured separately.
+  #
+  # device_class is blanked deliberately: the uptime sensor it copies from
+  # carries `duration`, which Home Assistant refuses on a text entity.
+  #
+  - platform: template
+    name: "Device Uptime"
+    entity_category: diagnostic
+    device_class: ""
+    icon: mdi:clock-start
+    lambda: |-
+      int seconds = (id(uptime_seconds_id).state);
+      int days = seconds / (24 * 3600);
+
+      seconds = seconds % (24 * 3600);
+
+      int hours = seconds / 3600;
+      seconds = seconds % 3600;
+
+      int minutes = seconds /  60;
+      seconds = seconds % 60;
+
+      // an implausibly large uptime means the sensor has no reading yet
+      if (days > 3650) {
+        return {"Starting up"};
+      }
+
+      char buf[32];
+      if (days) {
+        snprintf(buf, sizeof(buf), "%dd %dh %dm %ds", days, hours, minutes, seconds);
+      } else if (hours) {
+        snprintf(buf, sizeof(buf), "%dh %dm %ds", hours, minutes, seconds);
+      } else if (minutes) {
+        snprintf(buf, sizeof(buf), "%dm %ds", minutes, seconds);
+      } else {
+        snprintf(buf, sizeof(buf), "%ds", seconds);
+      }
+      return {buf};
+
+  #
+  # Why the device last restarted. The boot log says it too, but only over
+  # USB, and once the clock is hanging on a wall USB is exactly what you do
+  # not have. It separates the restarts that are expected - a flash, an OTA,
+  # the Restart button - from the ones that mean something: a brownout
+  # points at the supply feeding 25 LEDs, a task watchdog at something
+  # blocking the loop.
+  #
+  # Read from esp_reset_reason() directly rather than through the ESPHome
+  # `debug` component. On an ESP32-C3 that component stops the SoftAP from
+  # beaconing - the fallback AP disappears while the rest of the firmware
+  # runs on - which is a bad trade for a value this cheap to fetch.
+  #
+  - platform: template
+    name: "Reset Reason"
+    entity_category: diagnostic
+    icon: mdi:restart-alert
+    update_interval: 60s
+    lambda: |-
+      switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:   return {"Power on"};
+        case ESP_RST_EXT:       return {"External reset"};
+        case ESP_RST_SW:        return {"Software reset"};
+        case ESP_RST_PANIC:     return {"Panic / exception"};
+        case ESP_RST_INT_WDT:   return {"Interrupt watchdog"};
+        case ESP_RST_TASK_WDT:  return {"Task watchdog"};
+        case ESP_RST_WDT:       return {"Other watchdog"};
+        case ESP_RST_DEEPSLEEP: return {"Deep sleep wake"};
+        case ESP_RST_BROWNOUT:  return {"Brownout"};
+        case ESP_RST_SDIO:      return {"SDIO reset"};
+        case ESP_RST_USB:       return {"USB peripheral"};
+        case ESP_RST_JTAG:      return {"JTAG"};
+        default:                return {"Unknown"};
+      }
+
+#
+# https://esphome.io/components/sensor
+#
+sensor:
+  #
+  # https://esphome.io/components/sensor/uptime
+  #
+  # internal: the raw seconds are only the input for the readable string
+  # above, and two uptime entities in Home Assistant help nobody.
+  #
+  - platform: uptime
+    id: uptime_seconds_id
+    name: "Uptime"
+    icon: mdi:timer-outline
+    type: seconds
+    internal: True
+    entity_category: diagnostic
+    device_class: ""
+
+  #
+  # https://esphome.io/components/sensor/wifi_signal
+  #
+  # Both units of the same reading. dBm is the one to reason about, the
+  # percentage is the one that fits on a dashboard card.
+  #
+  - platform: wifi_signal
+    id: wifi_signal_db
+    name: "WiFi Signal (dBm)"
+    icon: mdi:wifi
+    entity_category: diagnostic
+    device_class: ""
+    unit_of_measurement: "dBm"
+    update_interval: 60s
+
+  #
+  # https://esphome.io/components/sensor/copy
+  #
+  # The usual linear mapping: -100dBm is 0%, -50dBm and better is 100%.
+  # Rough, and the only thing anyone reads off it is the trend.
+  #
+  - platform: copy
+    id: wifi_signal_percent
+    name: "WiFi Signal (%)"
+    icon: mdi:wifi
+    source_id: wifi_signal_db
+    unit_of_measurement: "%"
+    entity_category: diagnostic
+    device_class: ""
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+
+  #
+  # https://esphome.io/components/sensor/template
+  #
+  # Free heap and the largest contiguous block in it. Two numbers rather
+  # than one because "out of memory" and "too fragmented to find a
+  # contiguous buffer" fail identically from the outside, and the free
+  # figure alone cannot tell them apart. This node runs a web server, an
+  # API connection and an MQTT client at once, which is the workload that
+  # fragments a heap.
+  #
+  # Same reasoning as Reset Reason above: read straight from the ESP-IDF
+  # calls, not via the `debug` component, which breaks the SoftAP on a C3.
+  # For the same reason there is no internal_temperature sensor here - the
+  # on-chip sensor shares hardware with the radio and trips the same fault.
+  #
+  - platform: template
+    name: "Heap Free"
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    state_class: measurement
+    icon: mdi:memory
+    update_interval: 60s
+    lambda: 'return (float) esp_get_free_heap_size();'
+
+  - platform: template
+    name: "Heap Largest Block"
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    state_class: measurement
+    icon: mdi:memory
+    update_interval: 60s
+    lambda: 'return (float) heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);'
+
+#
+# https://esphome.io/components/binary_sensor
+#
+binary_sensor:
+  #
+  # https://esphome.io/components/binary_sensor/status
+  #
+  - platform: status
+    name: "Connection Status"
+    icon: mdi:connection
+
+#
+# https://esphome.io/components/button
+#
+button:
+  #
+  # https://esphome.io/components/button/restart
+  #
+  - platform: restart
+    id: restart_id
+    name: "Restart"
+    icon: mdi:reload
+    entity_category: config
+
+  #
+  # https://esphome.io/components/button/factory_reset
+  #
+  # Wipes the stored WiFi credentials and every persisted preference,
+  # including the selected dialect. The device comes back on the fallback
+  # AP with nothing configured - this is the "give it away" button, not the
+  # "it is behaving oddly" one.
+  #
+  - platform: factory_reset
+    id: factoryreset_id
+    name: "Factory Reset"
+    icon: mdi:restart
+    entity_category: config
+
+  #
+  # https://esphome.io/components/button/safe_mode
+  #
+  # Reboots into a stripped firmware that brings up WiFi and OTA and
+  # nothing else. The way back in when a change makes the device crash
+  # before it can be flashed again.
+  #
+  - platform: safe_mode
+    id: safemode_id
+    name: "Restart (Safe Mode)"
+    icon: mdi:reload
+    entity_category: config
