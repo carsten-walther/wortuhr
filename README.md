@@ -148,6 +148,13 @@ what `Reset Reason` cannot: that a restart happened at all while nobody was
 looking. A rising count against a low `Device Uptime` is the signature of a
 device rebooting in a loop. A factory reset clears it.
 
+`Reset Count`, `Reset Reason` and `Firmware Version` are **pushed once at boot**
+rather than polled. None of the three can change while the device is up — the
+counter is incremented during startup, the version is compiled in, and
+`esp_reset_reason()` latches its answer at reset — and ESPHome's `publish_state`
+does not deduplicate, so polling them resent an identical string every minute
+for the lifetime of the device.
+
 `Reset Reason` answers why the device last restarted. The boot log says it too,
 but only over USB, and once the clock is on a wall USB is exactly what you do
 not have — a brownout points at the supply feeding 25 LEDs, a task watchdog at
@@ -254,11 +261,17 @@ Both the Home Assistant API (encrypted) and MQTT run at once. MQTT discovery is
 off, because every entity is already adopted through the API — leaving it on
 would create a duplicate set in Home Assistant.
 
-Three `reboot_timeout: 0s` settings — on `wifi`, `api` and `mqtt` — disable the
-reboot-when-unreachable watchdogs. All three default to 15 minutes, and here a
-restart is something you can see across the room. The DS1307 carries the time
-through an outage on its own, so there is nothing a reboot fixes that waiting
-does not.
+Three `reboot_timeout: 0s` settings — on `wifi`, `api` and `mqtt` — say that no
+watchdog should restart the clock because something upstream is unreachable. All
+three default to 15 minutes, and here a restart is something you can see across
+the room. The DS1307 carries the time through an outage on its own, so there is
+nothing a reboot fixes that waiting does not.
+
+The `api` and `mqtt` ones do the work. The `wifi` one is currently inert: that
+watchdog is guarded with `!has_ap()`, and `has_ap_` is set when the config is
+loaded rather than when the fallback access point comes up — so the mere
+presence of the `ap:` block already disables it. The line is kept because it
+states the intent and starts enforcing it the moment `ap:` is dropped.
 
 The web interface is at **[wortuhr.local](http://wortuhr.local)**, or at
 `192.168.4.1` over the fallback AP. It asks for `web_username` and
@@ -298,7 +311,8 @@ These settings outside `substitutions:` are deliberate rather than default:
 - `logger: hardware_uart: USB_SERIAL_JTAG`. The default UART0 goes to GPIO20/21,
   which are not connected on a DevKitM-1 — without this the log level would not
   matter, because nothing would reach the USB socket.
-- `wifi:`, `api:` and `mqtt:` all with `reboot_timeout: 0s`, see above.
+- `wifi:`, `api:` and `mqtt:` all with `reboot_timeout: 0s` — the `wifi` one
+  inert while `ap:` is present, see above.
 - `i2c: scan: False`. Nothing to discover on a one-device bus. Turn it on
   together with `logger: level: DEBUG` when the question is whether the DS1307
   answers at all.

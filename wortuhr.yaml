@@ -147,10 +147,19 @@ esphome:
             effect: Rainbow
 
         #
-        # Push the boot counter once. It changes once per boot, so an
-        # interval could only republish an unchanged value.
+        # Push the three values that cannot change while the device is up.
+        # An interval could only ever republish an identical string, and
+        # publish_state does not deduplicate - nothing downstream filters
+        # them out, so a 60s poll was 1440 pointless messages a day per
+        # entity, over the api and mqtt both.
+        #
+        #   boot_count      changes once per boot, here
+        #   version         a compile-time constant
+        #   reset reason    esp_reset_reason() latches at boot
         #
         - component.update: boot_count_sensor
+        - component.update: firmware_version_sensor
+        - component.update: reset_reason_sensor
 
         #
         # The deadline. A device with no network never sees on_connect, and
@@ -161,16 +170,26 @@ esphome:
         - script.execute: show_clock
 
   #
-  # Blank the panel on a clean shutdown, so an OTA or a commanded restart
-  # does not leave the last frame frozen on the wall for the duration of
-  # the reboot. Priority 700 is early enough to still have the light
-  # component around to talk to.
+  # There is deliberately no on_shutdown block blanking the panel.
   #
-  on_shutdown:
-    priority: 700
-    then:
-      - light.turn_off:
-          id: led_strip_id
+  # One used to sit here at priority 700, with a comment claiming it kept the
+  # last frame off the wall for the duration of a reboot. It never did any of
+  # that. Application::reboot() calls on_shutdown() on every component and then
+  # arch_restart() immediately, while the strip is only ever written from
+  # LightState::loop() - and Component::teardown() defaults to returning true
+  # with neither light nor esp32_rmt_led_strip overriding it, so that loop
+  # never runs again. The turn_off set next_write_ and nothing consumed it.
+  #
+  # default_transition_length below makes it doubly moot: a turn_off with no
+  # explicit length takes the transition branch in LightCall::perform(), so
+  # even with a loop it would only have STARTED a 1s fade that the restart
+  # cuts off part way through.
+  #
+  # WS2811s latch their last frame, so the panel keeps showing the time it was
+  # showing until the new firmware boots and writes - which is exactly what the
+  # old comment promised to prevent. Better an honest gap than a line that
+  # reads as if it handles this.
+  #
 
 #
 # https://esphome.io/components/esp32
@@ -307,6 +326,14 @@ wifi:
   # runs the boot rainbow and comes back. The DS1307 carries the time
   # through an outage on its own, so there is nothing a reboot fixes that
   # simply waiting does not.
+  #
+  # Worth knowing: as long as the ap: block below exists, this line changes
+  # nothing. WiFiComponent::loop() guards that watchdog with `!has_ap()`, and
+  # has_ap_ is set by set_ap() at config time rather than when the fallback AP
+  # actually comes up - so the reboot path is already unreachable. Kept anyway,
+  # because it states the intent and becomes the thing that enforces it the
+  # moment somebody drops ap:. The api and mqtt timeouts below have no such
+  # guard and do take effect.
   #
   reboot_timeout: 0s
   enable_on_boot: True
@@ -1084,10 +1111,14 @@ text_sensor:
   # it is worth bumping on every change.
   #
   - platform: template
+    id: firmware_version_sensor
     name: "Firmware Version"
     icon: mdi:new-box
     entity_category: diagnostic
-    update_interval: 60s
+    # never, not 60s: the lambda returns a compile-time constant, so polling
+    # it could only resend the same string for the lifetime of the device.
+    # Pushed once from the late on_boot block instead.
+    update_interval: never
     lambda: |-
       return {"$version"};
 
@@ -1166,10 +1197,14 @@ text_sensor:
   # runs on - which is a bad trade for a value this cheap to fetch.
   #
   - platform: template
+    id: reset_reason_sensor
     name: "Reset Reason"
     entity_category: diagnostic
     icon: mdi:restart-alert
-    update_interval: 60s
+    # never, not 60s: esp_reset_reason() latches the cause at boot and cannot
+    # change while the device is up, so this is even more static than the boot
+    # counter next to it. Pushed once from the late on_boot block.
+    update_interval: never
     lambda: |-
       switch (esp_reset_reason()) {
         case ESP_RST_POWERON:   return {"Power on"};
