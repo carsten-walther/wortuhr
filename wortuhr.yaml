@@ -428,6 +428,7 @@ web_server:
   # The credentials were already sitting unused in secrets.yaml.
   #
   auth:
+    type: digest
     username: !secret web_username
     password: !secret web_password
 
