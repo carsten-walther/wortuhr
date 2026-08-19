@@ -120,13 +120,14 @@ First flash over USB, everything after that over the air.
 | Mode | select | Dialect: Hochdeutsch, Bayrisch, Sächsisch, Schwäbisch |
 
 The light carries six effects. **Time** is the clock and the one it runs on.
-`Rainbow` is what the boot sequence puts up while the network comes up, and
+`Twinkle` is what the boot sequence puts up while the network comes up, and
 `Color Wipe` walks the chain one LED at a time, which is how a dead one gets
-found. `Fireworks`, `Twinkle` and `Random Twinkle` are decoration.
+found. `Fireworks`, `Rainbow` and `Random Twinkle` are decoration.
 
-`gamma_correct` is `1.0` rather than the default `2.8` because of those last
-three: they fade pixels in and out, and a gamma curve applied on top of a
-fade crushes its dark end into black. The side effect is on the brightness
+`gamma_correct` is `1.0` rather than the default `2.8` because of the effects
+that draw their own ramps — `Fireworks` and both twinkles fade pixels in and
+out, and a gamma curve applied on top of a fade crushes its dark end into
+black. The side effect is on the brightness
 slider — at `1.0` a setting of 70 % drives the LEDs at 70 %, not at the ~37 %
 that `0.7^2.8` works out to, so the panel reads brighter than it used to at
 the same number.
@@ -236,20 +237,20 @@ indicator:
 |--:|---|
 | 800 | Read the DS1307 |
 | 700 | Count this boot |
-| 600 | Rainbow — the start-up is not finished |
-| −100 | Colour and brightness, then start the `BOOT_RAINBOW_TIMEOUT` deadline |
+| 600 | Twinkle — the start-up is not finished |
+| −100 | Colour and brightness, then start the `BOOT_TIMEOUT` deadline |
 
-The rainbow ends when **either** WiFi associates (`wifi: on_connect`) **or** the
+The twinkle ends when **either** WiFi associates (`wifi: on_connect`) **or** the
 deadline expires, whichever comes first. Both call the same `show_clock` script,
-which only acts while the rainbow is still up — so the second one to arrive
+which only acts while the twinkle is still up — so the second one to arrive
 finds it gone and does nothing.
 
 The deadline is what keeps this honest for a clock that is supposed to work
 offline: with no network there is no `on_connect`, and without it the panel
-would sit on a rainbow forever.
+would sit on a twinkle forever.
 
 The same guard means a WiFi **re**connect hours later cannot yank a chosen
-effect off the wall — by then the effect is no longer `Rainbow`.
+effect off the wall — by then the effect is no longer `Twinkle`.
 
 > This replaces a stage at priority 200 that tested `wifi.connected` and **never
 > fired once**: every `on_boot` trigger runs inside `setup()`, milliseconds

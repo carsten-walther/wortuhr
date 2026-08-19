@@ -68,13 +68,13 @@ substitutions:
   CLOCK_REFRESH_INTERVAL: 100ms
 
   #
-  # How long the boot rainbow is allowed to stand before the clock takes over
-  # regardless. The rainbow means "not ready yet", and WiFi coming up is what
+  # How long the boot effect is allowed to stand before the clock takes over
+  # regardless. The twinkle means "not ready yet", and WiFi coming up is what
   # normally ends it - but this device keeps time from a battery-backed RTC and
   # has to show it with no network at all, so the indicator needs a deadline.
   # Whichever happens first wins; the other becomes a no-op.
   #
-  BOOT_RAINBOW_TIMEOUT: 10s
+  BOOT_TIMEOUT: 10s
 
 #
 # https://esphome.io/components/esphome
@@ -129,13 +129,13 @@ esphome:
       then:
         - light.turn_on:
             id: led_strip_id
-            effect: Rainbow
+            effect: Twinkle
 
     - priority: -100
       then:
         #
         # Colour and brightness for a device with nothing stored yet. The
-        # effect stays on Rainbow here - the clock is started by whichever
+        # effect stays on Twinkle here - the clock is started by whichever
         # of the two paths below gets there first.
         #
         - light.turn_on:
@@ -144,7 +144,7 @@ esphome:
             red: 100%
             green: 100%
             blue: 100%
-            effect: Rainbow
+            effect: Twinkle
 
         #
         # Push the three values that cannot change while the device is up.
@@ -166,7 +166,7 @@ esphome:
         # a clock that refuses to show the time because the router is down
         # would be a worse fault than the one this replaced.
         #
-        - delay: ${BOOT_RAINBOW_TIMEOUT}
+        - delay: ${BOOT_TIMEOUT}
         - script.execute: show_clock
 
   #
@@ -288,8 +288,11 @@ logger:
 #
 wifi:
   id: wifi_id
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  networks:
+    - ssid: !secret wifi_ssid_home
+      password: !secret wifi_password_home
+    - ssid: !secret wifi_ssid_work
+      password: !secret wifi_password_work
   domain: .local
   fast_connect: False
 
@@ -563,11 +566,11 @@ time:
 #
 script:
   #
-  # Ends the boot rainbow and hands the panel to the clock. Two things call it
+  # Ends the boot effect and hands the panel to the clock. Two things call it
   # and neither knows about the other: wifi: on_connect, when the radio
   # associates, and the deadline at the end of on_boot, for a device with no
   # network to associate to. Whichever arrives first does the work; the other
-  # finds the rainbow already gone and returns.
+  # finds the twinkle already gone and returns.
   #
   # That is what the guard is for, and it does a second job: it also returns
   # when somebody has picked an effect by hand in the meantime. Without it, a
@@ -582,7 +585,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(led_strip_id).get_effect_name().str() == "Rainbow";'
+            lambda: 'return id(led_strip_id).get_effect_name().str() == "Twinkle";'
           then:
             - light.turn_on:
                 id: led_strip_id
@@ -670,13 +673,14 @@ light:
       #
       # Five stock effects, in two groups.
       #
-      # Rainbow and Color Wipe earn their place as diagnostics: Rainbow is what
+      # Twinkle and Color Wipe earn their place as diagnostics: Twinkle is what
       # on_boot puts up while the network comes up, and Color Wipe walks the
       # chain one LED at a time, which is how you find a dead one.
       #
-      # Fireworks and the two Twinkles are decoration. They are the reason
-      # gamma_correct above is 1.0 - all three fade pixels in and out, and that
-      # is exactly the maths a gamma curve on top of it ruins.
+      # Rainbow, Fireworks and Random Twinkle are decoration. Together with the
+      # boot Twinkle they are the reason gamma_correct above is 1.0 - the
+      # fireworks and both twinkles fade pixels in and out, and that is exactly
+      # the maths a gamma curve on top of it ruins.
       #
       # Parameters are spelled out rather than left to the schema so a change
       # here is visible in a diff. They are the same values the Infinity clock
@@ -702,7 +706,7 @@ light:
       - addressable_twinkle:
           name: Twinkle
           twinkle_probability: 5%
-          progress_interval: 4ms
+          progress_interval: 2ms
 
       - addressable_random_twinkle:
           name: Random Twinkle
