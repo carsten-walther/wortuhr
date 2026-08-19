@@ -96,6 +96,8 @@ ota_password: "..."
 mqtt_broker: "..."
 mqtt_username: "..."
 mqtt_password: "..."
+web_username: "..."         # web interface login
+web_password: "..."
 ```
 
 Then:
@@ -117,15 +119,34 @@ First flash over USB, everything after that over the air.
 | LED Color | light | The panel. Colour, brightness and effect |
 | Mode | select | Dialect: Hochdeutsch, Bayrisch, Sächsisch, Schwäbisch |
 
-The light carries four effects. **Time** is the clock and the one it runs on;
-`Rainbow`, `Color Wipe` and `Scan` are boot and test patterns — useful for
-walking the chain when an LED is suspected dead, not for leaving on.
+The light carries six effects. **Time** is the clock and the one it runs on.
+`Rainbow` is what the boot sequence puts up while the network comes up, and
+`Color Wipe` walks the chain one LED at a time, which is how a dead one gets
+found. `Fireworks`, `Twinkle` and `Random Twinkle` are decoration.
+
+`gamma_correct` is `1.0` rather than the default `2.8` because of those last
+three: they fade pixels in and out, and a gamma curve applied on top of a
+fade crushes its dark end into black. The side effect is on the brightness
+slider — at `1.0` a setting of 70 % drives the LEDs at 70 %, not at the ~37 %
+that `0.7^2.8` works out to, so the panel reads brighter than it used to at
+the same number.
+
+Switching the panel on without asking for anything lands on `Time`, so a
+decoration cannot be left running by accident. Asking for an effect as part of
+the switch-on keeps it — the trigger only normalises a switch-on that specified
+nothing.
 
 ### Diagnostic
 
 `ESPHome Version`, `Firmware Version`, `SSID`, `IP Address`, `DNS Address`,
-`Device Uptime`, `Reset Reason`, `Heap Free`, `Heap Largest Block`,
-`WiFi Signal (dBm)`, `WiFi Signal (%)`, `Connection Status`.
+`Device Uptime`, `Reset Reason`, `Reset Count`, `Heap Free`,
+`Heap Largest Block`, `WiFi Signal (dBm)`, `WiFi Signal (%)`,
+`Connection Status`.
+
+`Reset Count` is a persisted counter, incremented once per boot. It answers
+what `Reset Reason` cannot: that a restart happened at all while nobody was
+looking. A rising count against a low `Device Uptime` is the signature of a
+device rebooting in a loop. A factory reset clears it.
 
 `Reset Reason` answers why the device last restarted. The boot log says it too,
 but only over USB, and once the clock is on a wall USB is exactly what you do
@@ -207,12 +228,25 @@ indicator:
 | Priority | What |
 |--:|---|
 | 800 | Read the DS1307 |
-| 600 | Rainbow — the panel is alive and the firmware is running |
-| 200 | Rainbow off, if WiFi came up in time |
-| −100 | The clock |
+| 700 | Count this boot |
+| 600 | Rainbow — the start-up is not finished |
+| −100 | Colour and brightness, then start the `BOOT_RAINBOW_TIMEOUT` deadline |
 
-A dark panel late in the boot means the network was there; a rainbow that
-lingers means it was not.
+The rainbow ends when **either** WiFi associates (`wifi: on_connect`) **or** the
+deadline expires, whichever comes first. Both call the same `show_clock` script,
+which only acts while the rainbow is still up — so the second one to arrive
+finds it gone and does nothing.
+
+The deadline is what keeps this honest for a clock that is supposed to work
+offline: with no network there is no `on_connect`, and without it the panel
+would sit on a rainbow forever.
+
+The same guard means a WiFi **re**connect hours later cannot yank a chosen
+effect off the wall — by then the effect is no longer `Rainbow`.
+
+> This replaces a stage at priority 200 that tested `wifi.connected` and **never
+> fired once**: every `on_boot` trigger runs inside `setup()`, milliseconds
+> apart, while the radio needs hundreds of milliseconds to associate.
 
 ### Network
 
@@ -227,10 +261,19 @@ through an outage on its own, so there is nothing a reboot fixes that waiting
 does not.
 
 The web interface is at **[wortuhr.local](http://wortuhr.local)**, or at
-`192.168.4.1` over the fallback AP. `local: true` embeds its assets in the
-firmware — by default web server version 3 fetches its JavaScript from
-`oi.esphome.io` at page load, which is a blank page on a network with no
-internet access.
+`192.168.4.1` over the fallback AP. It asks for `web_username` and
+`web_password` from `secrets.yaml` — without that anyone on the LAN could drive
+the panel and reach the Factory Reset button, which clears the WiFi
+credentials.
+
+`local: true` embeds its assets in the firmware — by default web server version
+3 fetches its JavaScript from `oi.esphome.io` at page load, which is a blank
+page on a network with no internet access.
+
+During an OTA update the panel goes dark and comes back with the clock: the
+effect lambda and the LED transfers otherwise compete with the update for CPU
+and for the WiFi stack. A failed update does not reboot, so the clock is put
+back explicitly.
 
 ---
 
@@ -259,6 +302,15 @@ These settings outside `substitutions:` are deliberate rather than default:
 - `i2c: scan: False`. Nothing to discover on a one-device bus. Turn it on
   together with `logger: level: DEBUG` when the question is whether the DS1307
   answers at all.
+- `light: gamma_correct: 1.0` instead of the default `2.8`, see Entities.
+- `wifi: power_save_mode: LIGHT`, `esp32: cpu_frequency: 80MHZ` and
+  `wifi: output_power: 12dB`. Taken from the Infinity clock — same chip, same
+  framework — where the first two together took the die from 67 °C to 38–41 °C.
+  **Those figures were measured on that device, not on this one.** `LIGHT`
+  delays inbound packets by 100–300 ms while the access point buffers them;
+  outbound is untouched, and this node's traffic is almost all outbound. If OTA
+  or the web interface start misbehaving, `power_save_mode` is the first line to
+  put back to `NONE`.
 
 ---
 

@@ -51,6 +51,10 @@ and MQTT.
 For the web interface, connect to **[wortuhr.local](http://wortuhr.local)**. Over
 the fallback access point the address is `http://192.168.4.1` instead.
 
+The page asks for a username and password — the `web_username` and
+`web_password` set in `secrets.yaml`. Without them the Factory Reset button
+would be one click away for anyone on the network.
+
 ### <a name="colour-and-brightness"></a>Colour and brightness
 
 The entity is called **LED Color**. A colour picker sets the colour of the lit
@@ -65,20 +69,30 @@ Two things differ from what you might expect:
 
 There is no ambient light sensor, so brightness never adjusts itself.
 
+Note that 70 % here drives the LEDs at 70 %, not at the roughly 37 % a
+perceptual dimming curve would give. The curve is switched off so the fading
+effects do not lose their dark end, which makes every setting read brighter
+than it would on an ordinary lamp.
+
 ### <a name="effects"></a>Effects
 
-The light offers four effects:
+The light offers six effects:
 
 | Effect | What it is |
 |---|---|
 | **Time** | The clock. This is the one it runs on |
-| Rainbow | Shown during boot while the network comes up |
-| Color Wipe | Test pattern |
-| Scan | Test pattern |
+| Rainbow | The boot indicator: shown until the clock joins the WLAN |
+| Color Wipe | Walks the chain one LED at a time — how you find a dead one |
+| Fireworks | Decoration |
+| Twinkle | Decoration |
+| Random Twinkle | Decoration, each spark in its own colour |
 
-`Color Wipe` and `Scan` are there to walk the chain when an LED is suspected
-dead. Switching the panel off and on again always puts `Time` back on it, so a
-test pattern cannot be left running by accident.
+Switching the panel off and on again always puts `Time` back on it, so a test
+pattern or a decoration cannot be left running by accident.
+
+Turning the panel on **and naming an effect in the same command** keeps that
+effect — Home Assistant's "turn on with effect Fireworks" works. Only a plain
+switch-on gets normalised back to `Time`.
 
 ### <a name="dialects"></a>Dialects
 
@@ -139,10 +153,16 @@ not the timekeeping.
 The panel is the only thing this clock can say anything with, so it reports its
 own start-up:
 
-1. A **rainbow** means the firmware is running and the network has not come up
+1. A **rainbow** means the firmware is running and it has not joined the WLAN
    yet.
-2. The rainbow **going dark** means WiFi connected.
-3. The **time appearing** means the clock is set and running.
+2. The **time appearing** means it is on the network — or that ten seconds have
+   passed and the clock took over anyway.
 
-A rainbow that lingers is a network problem. A panel that stays dark from the
-start is a power or wiring problem — see [BUILD.md](BUILD.md).
+So a rainbow that clears in a second or two is a normal start-up. A rainbow
+that runs the full ten seconds every time means the clock is not reaching the
+WLAN, and it will then show the time regardless — from the DS1307, which is
+right whether or not there is a network. Check `Connection Status` and `SSID`
+to tell the two apart.
+
+A panel that stays dark from the start is a power or wiring problem — see
+[BUILD.md](BUILD.md).

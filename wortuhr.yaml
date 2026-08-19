@@ -67,6 +67,15 @@ substitutions:
   #
   CLOCK_REFRESH_INTERVAL: 100ms
 
+  #
+  # How long the boot rainbow is allowed to stand before the clock takes over
+  # regardless. The rainbow means "not ready yet", and WiFi coming up is what
+  # normally ends it - but this device keeps time from a battery-backed RTC and
+  # has to show it with no network at all, so the indicator needs a deadline.
+  # Whichever happens first wins; the other becomes a no-op.
+  #
+  BOOT_RAINBOW_TIMEOUT: 10s
+
 #
 # https://esphome.io/components/esphome
 #
@@ -86,19 +95,35 @@ esphome:
   #
   #   800   read the RTC, before anything asks what time it is. i2c is up
   #         at priority 1000, so the bus is ready by the time this fires.
-  #   600   rainbow: the panel is alive and the firmware is running
-  #   200   rainbow off again if WiFi came up in time
-  #  -100   the clock itself
+  #   700   count this boot
+  #   600   rainbow: the panel is alive, the start-up is not finished
+  #  -100   colour and brightness, then hand over to the clock
   #
-  # The priority 200 stage is a nicety rather than a requirement - stage
-  # -100 replaces the rainbow with the clock either way. What it buys is a
-  # dark panel for the last stretch of the boot when the network was there,
-  # which is the difference between "still starting" and "no WiFi".
+  # There used to be a stage at priority 200 that dropped the rainbow "if WiFi
+  # came up in time". It never fired once. Every on_boot trigger runs inside
+  # setup(), milliseconds apart, and the radio needs hundreds of milliseconds
+  # to associate - so wifi.connected was still false when the condition was
+  # tested, on every boot, network or not. It has been removed; the job it was
+  # meant to do now sits on wifi: on_connect, which fires when the radio really
+  # has associated.
+  #
+  # 700 for the boot counter, not -100: a restoring global is a component with
+  # setup_priority HARDWARE, and incrementing at that same priority races the
+  # load() that reads the stored value - the increment can land on the initial
+  # 0 and then be overwritten, so the count would never grow.
+  #
+  # The rainbow is a real indicator now rather than the few-millisecond flash
+  # it was: -100 leaves it up and starts a deadline instead of replacing it on
+  # the spot. See the show_clock script for how it ends.
   #
   on_boot:
     - priority: 800
       then:
         - ds1307.read_time:
+
+    - priority: 700
+      then:
+        - lambda: 'id(boot_count) += 1;'
 
     - priority: 600
       then:
@@ -106,24 +131,34 @@ esphome:
             id: led_strip_id
             effect: Rainbow
 
-    - priority: 200
-      then:
-        if:
-          condition:
-            wifi.connected:
-          then:
-            - light.turn_off:
-                id: led_strip_id
-
     - priority: -100
       then:
+        #
+        # Colour and brightness for a device with nothing stored yet. The
+        # effect stays on Rainbow here - the clock is started by whichever
+        # of the two paths below gets there first.
+        #
         - light.turn_on:
             id: led_strip_id
             brightness: ${LIGHT_BRIGHTNESS_DEFAULT}
             red: 100%
             green: 100%
             blue: 100%
-            effect: Time
+            effect: Rainbow
+
+        #
+        # Push the boot counter once. It changes once per boot, so an
+        # interval could only republish an unchanged value.
+        #
+        - component.update: boot_count_sensor
+
+        #
+        # The deadline. A device with no network never sees on_connect, and
+        # a clock that refuses to show the time because the router is down
+        # would be a worse fault than the one this replaced.
+        #
+        - delay: ${BOOT_RAINBOW_TIMEOUT}
+        - script.execute: show_clock
 
   #
   # Blank the panel on a clean shutdown, so an OTA or a commanded restart
@@ -143,6 +178,18 @@ esphome:
 esp32:
   board: esp32-c3-devkitm-1
   variant: ESP32C3
+
+  #
+  # Half the 160MHz this variant defaults to. Dynamic power scales with the
+  # clock, so this is a lever against die temperature, and nothing here is
+  # compute-bound: the heaviest load is the Time effect at 100ms over 25
+  # pixels. Raise it back to 160MHZ if an effect ever starts stuttering.
+  #
+  # Taken from the Infinity clock, which measured the effect there. Not
+  # measured on this device.
+  #
+  cpu_frequency: 80MHZ
+
   framework:
     #
     # esp-idf. This ran on arduino for a long time, which on recent ESPHome
@@ -226,7 +273,32 @@ wifi:
   password: !secret wifi_password
   domain: .local
   fast_connect: False
-  power_save_mode: NONE
+
+  #
+  # LIGHT rather than NONE. NONE keeps the radio powered permanently, which on
+  # the Infinity clock - same chip, same framework - was the single largest
+  # heat source on the board: 67 C down to 38-41 C together with the
+  # cpu_frequency drop above.
+  #
+  # LIGHT maps to WIFI_PS_MIN_MODEM, which sleeps between DTIM beacons and
+  # wakes for every one of them. Only INBOUND traffic is delayed, typically
+  # 100-300ms while the access point buffers it; outbound is untouched. This
+  # node's traffic is almost entirely outbound sensor publishes, and the clock
+  # itself never touches the network between SNTP syncs.
+  #
+  # Those figures were measured on the Infinity clock, not on this one. If OTA
+  # updates or the web interface start misbehaving, this is the first line to
+  # put back to NONE.
+  #
+  power_save_mode: LIGHT
+
+  #
+  # Down from the ~20dBm default. Barely moves the power budget on a node that
+  # transmits well under 0.1% of the time, and does no harm either. Do not go
+  # lower: at a marginal RSSI a weaker uplink buys retransmits, and those cost
+  # more airtime than the lower power saves.
+  #
+  output_power: 12dB
 
   #
   # 0s disables the reboot-when-no-network watchdog. The default 15min
@@ -246,6 +318,19 @@ wifi:
   ap:
     ssid: "${project_name}"
     password: !secret wifi_ap_password
+
+  #
+  # Ends the boot rainbow the moment the radio has actually associated, which
+  # is what the removed on_boot stage at priority 200 was trying and failing to
+  # do. The guard lives in the script: it only acts while the rainbow is still
+  # up, so a later reconnect cannot pull a chosen effect out from under anyone.
+  #
+  # There is deliberately no on_disconnect counterpart. The clock runs off the
+  # system clock and the DS1307, not off the network, so losing WiFi is no
+  # reason to stop showing the time.
+  #
+  on_connect:
+    - script.execute: show_clock
 
 #
 # https://esphome.io/components/captive_portal
@@ -307,6 +392,15 @@ web_server:
   version: 3
   local: True
 
+  #
+  # Without this anyone on the LAN can drive the panel - and reach the Factory
+  # Reset button, which clears the WiFi credentials and the stored dialect.
+  # The credentials were already sitting unused in secrets.yaml.
+  #
+  auth:
+    username: !secret web_username
+    password: !secret web_password
+
 #
 # https://esphome.io/components/ota
 #
@@ -326,6 +420,51 @@ ota:
   #
   - platform: esphome
     password: !secret ota_password
+
+    #
+    # The panel is not idle while an update runs: the effect lambda and the RMT
+    # transfers compete with it for CPU and for the WiFi stack, and the radio
+    # now sleeps between beacons. Parking the light for the duration is free
+    # insurance.
+    #
+    on_begin:
+      then:
+        - light.turn_off: led_strip_id
+
+    #
+    # A failed or aborted update does not reboot, so put the clock back rather
+    # than leaving a dark panel on the wall.
+    #
+    on_error:
+      then:
+        - light.turn_on:
+            id: led_strip_id
+            effect: Time
+
+    on_abort:
+      then:
+        - light.turn_on:
+            id: led_strip_id
+            effect: Time
+
+#
+# https://esphome.io/components/globals
+#
+globals:
+  #
+  # Survives restarts, so a rising count proves the device rebooted even if
+  # nobody was watching. It counts every restart alike - an OTA, the Restart
+  # button, a power cut and a watchdog are indistinguishable here, which is
+  # exactly why Reset Reason sits next to it in the entity list. A factory
+  # reset clears it back to 0.
+  #
+  # Incremented from the on_boot stage at priority 700; see the note there for
+  # why not at -100.
+  #
+  - id: boot_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
 
 #
 # https://esphome.io/components/i2c
@@ -393,6 +532,36 @@ time:
           id: ds1307_time
 
 #
+# https://esphome.io/components/script
+#
+script:
+  #
+  # Ends the boot rainbow and hands the panel to the clock. Two things call it
+  # and neither knows about the other: wifi: on_connect, when the radio
+  # associates, and the deadline at the end of on_boot, for a device with no
+  # network to associate to. Whichever arrives first does the work; the other
+  # finds the rainbow already gone and returns.
+  #
+  # That is what the guard is for, and it does a second job: it also returns
+  # when somebody has picked an effect by hand in the meantime. Without it, a
+  # WiFi reconnect an hour later would yank Fireworks off the wall and put the
+  # clock back.
+  #
+  # mode: single is nominal - there is no delay inside, so it cannot overlap
+  # with itself.
+  #
+  - id: show_clock
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return id(led_strip_id).get_effect_name().str() == "Rainbow";'
+          then:
+            - light.turn_on:
+                id: led_strip_id
+                effect: Time
+
+#
 # https://esphome.io/components/select/template
 #
 # Which way the clock says the time. The four options are not translations
@@ -447,23 +616,71 @@ select:
 light:
   - platform: esp32_rmt_led_strip
     id: led_strip_id
-    name: "LED Color"
+    name: LED Color
+    icon: mdi:led-outline
     rgb_order: GRB
     chipset: WS2811
     pin: ${PIN_NEOPIXEL_DATA}
     num_leds: ${NUMBER_OF_LEDS}
     default_transition_length: 1s
 
+    # The schema default is 2.8, which is right for a light you dim by hand: it
+    # makes the slider feel linear to the eye. It is wrong once effects draw
+    # their own brightness ramps - Fireworks fades its sparks out, both
+    # Twinkles ramp pixels up and down, Rainbow walks a hue gradient. Gamma
+    # then lands on top of maths that has already decided what each pixel
+    # should be, and crushes the dark end of every one of those ramps into
+    # black. 1.0 hands the computed value straight to the LED.
+    #
+    # The clock face itself does not care either way: it paints one flat colour
+    # and black, and a flat colour survives any curve. What does change for it
+    # is what the brightness slider means. At 1.0 the panel at 70% sits at 70%
+    # of the drive rather than at the ~37% that 0.7^2.8 works out to, so
+    # LIGHT_BRIGHTNESS_DEFAULT reads visibly brighter than it did before.
+    gamma_correct: 1.0
+
     effects:
       #
-      # The three stock effects are boot and test indicators rather than
-      # anything you would leave running: Rainbow is what on_boot shows
-      # while the network comes up, the other two are there to walk the
-      # chain when a LED is suspected dead.
+      # Five stock effects, in two groups.
+      #
+      # Rainbow and Color Wipe earn their place as diagnostics: Rainbow is what
+      # on_boot puts up while the network comes up, and Color Wipe walks the
+      # chain one LED at a time, which is how you find a dead one.
+      #
+      # Fireworks and the two Twinkles are decoration. They are the reason
+      # gamma_correct above is 1.0 - all three fade pixels in and out, and that
+      # is exactly the maths a gamma curve on top of it ruins.
+      #
+      # Parameters are spelled out rather than left to the schema so a change
+      # here is visible in a diff. They are the same values the Infinity clock
+      # uses, which is where this block came from.
       #
       - addressable_rainbow:
+          name: Rainbow
+          speed: 10
+          width: 50
+
       - addressable_color_wipe:
-      - addressable_scan:
+          name: Color Wipe
+          add_led_interval: 100ms
+          reverse: false
+
+      - addressable_fireworks:
+          name: Fireworks
+          update_interval: 32ms
+          spark_probability: 10%
+          use_random_color: false
+          fade_out_rate: 120
+
+      - addressable_twinkle:
+          name: Twinkle
+          twinkle_probability: 5%
+          progress_interval: 4ms
+
+      - addressable_random_twinkle:
+          name: Random Twinkle
+          twinkle_probability: 5%
+          progress_interval: 32ms
 
       #
       # ── The clock itself ─────────────────────────────────
@@ -830,10 +1047,20 @@ light:
     # Re-entry is not a concern: the trigger fires on the off-to-on edge,
     # and by the time this call runs the light is already on.
     #
+    # The guard is what makes this only normalise a switch-on that did not ask
+    # for anything. By the time the trigger runs the call has already applied
+    # its effect, so "None" here means "switched on without one" - and a
+    # turn_on that did ask for Fireworks keeps Fireworks instead of having the
+    # clock slammed back over it a moment later.
+    #
     on_turn_on:
-      - light.turn_on:
-          id: led_strip_id
-          effect: Time
+      - if:
+          condition:
+            lambda: 'return id(led_strip_id).get_effect_name().str() == "None";'
+          then:
+            - light.turn_on:
+                id: led_strip_id
+                effect: Time
 
 #
 # https://esphome.io/components/text_sensor
@@ -891,7 +1118,18 @@ text_sensor:
     device_class: ""
     icon: mdi:clock-start
     lambda: |-
-      int seconds = (id(uptime_seconds_id).state);
+      // The uptime sensor only publishes from update(), so its state is NaN
+      // until the first poll. Test that BEFORE the cast: converting a NaN
+      // float to int is undefined behaviour, and the guard this replaces
+      // ("days > 3650") assumed the cast would yield a huge positive value.
+      // It generally does not, so the fallback never actually fired and the
+      // first minute showed whatever the conversion happened to produce.
+      const float uptime = id(uptime_seconds_id).state;
+      if (std::isnan(uptime)) {
+        return {"Starting up"};
+      }
+
+      int seconds = (int) uptime;
       int days = seconds / (24 * 3600);
 
       seconds = seconds % (24 * 3600);
@@ -901,11 +1139,6 @@ text_sensor:
 
       int minutes = seconds /  60;
       seconds = seconds % 60;
-
-      // an implausibly large uptime means the sensor has no reading yet
-      if (days > 3650) {
-        return {"Starting up"};
-      }
 
       char buf[32];
       if (days) {
@@ -1039,6 +1272,27 @@ sensor:
     icon: mdi:memory
     update_interval: 60s
     lambda: 'return (float) heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);'
+
+  #
+  # How many times this device has started, from the persisted boot_count
+  # global. Read it together with Reset Reason and Device Uptime: the reason
+  # alone cannot tell you a restart happened while nobody was looking, and a
+  # rising count at a low uptime is the signature of a device rebooting in a
+  # loop.
+  #
+  # Pushed once from on_boot rather than polled - it changes once per boot, and
+  # publish_state does not deduplicate, so an interval would only resend an
+  # unchanged value for the lifetime of the device.
+  #
+  - platform: template
+    id: boot_count_sensor
+    name: "Reset Count"
+    icon: mdi:restart-alert
+    entity_category: diagnostic
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: 'return (float) id(boot_count);'
 
 #
 # https://esphome.io/components/binary_sensor
