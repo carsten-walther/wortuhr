@@ -403,7 +403,7 @@ mqtt:
   password: !secret mqtt_password
   reboot_timeout: 0s
   enable_on_boot: True
-  discovery: False
+  discovery: True
   keepalive: 60s
 
 #
